@@ -1,1 +1,182 @@
+import requests
+from bs4 import BeautifulSoup
+import pymysql
+from datetime import date
 
+EXCHANGE_API_KEY = "d2cb28431daae12cf8698f33"
+EXCHANGE_API_URL = f"https://v6.exchangerate-api.com/v6/{EXCHANGE_API_KEY}/latest/"
+
+WEATHER_API_KEY = "9d62630a4007c192640660eeb92f821a"
+WEATHER_API_URL = "http://api.openweathermap.org/data/2.5/weather"
+
+
+def convert_to_sek(amount, currency):
+    if currency == "SEK":
+        return amount
+    try:
+        r = requests.get(EXCHANGE_API_URL + currency)
+        rate = r.json()['conversion_rates']['SEK']
+        return amount * rate
+    except:
+        return None
+
+
+def extract_salary(url, currency="SEK"):
+    r = requests.get(url)
+    soup = BeautifulSoup(r.text, 'html.parser')
+    for td in soup.find_all('td'):
+        if td.get_text(strip=True) == "Average Monthly Net Salary (After Tax)":
+            next_td = td.find_next('td', class_='priceValue')
+            if next_td:
+                text = next_td.find('span', class_='first_currency').get_text(strip=True)
+                val = float(text.replace(',', '').split()[0])
+                return convert_to_sek(val, currency)
+    return None
+
+
+def extract_rent(url, currency="SEK"):
+    r = requests.get(url)
+    soup = BeautifulSoup(r.text, 'html.parser')
+    for td in soup.find_all('td'):
+        if td.get_text(strip=True) == "Apartment (1 bedroom) in City Centre":
+            next_td = td.find_next('td', class_='priceValue')
+            if next_td:
+                text = next_td.find('span', class_='first_currency').get_text(strip=True)
+                val = float(text.replace(',', '').split()[0])
+                return convert_to_sek(val, currency)
+    return None
+
+
+def extract_monthly_cost_excluding_rent(url, currency="SEK"):
+    r = requests.get(url)
+    soup = BeautifulSoup(r.text, 'html.parser')
+    summary = soup.find('div', class_='seeding-call table_color summary limit_size_ad_right padding_lower other_highlight_color')
+    if summary:
+        for li in summary.find_all('li'):
+            if 'The estimated monthly costs for a single person are' in li.text:
+                start = li.text.find('are') + 4
+                text = li.text[start:].strip()
+                val = float(text.split('kr')[0].strip().replace(',', ''))
+                return convert_to_sek(val, currency)
+    return None
+
+
+def extract_quality_of_life(url):
+    r = requests.get(url)
+    soup = BeautifulSoup(r.text, 'html.parser')
+    table = soup.find('table', class_='table_indices')
+    if table:
+        for row in table.find_all('tr'):
+            if 'Quality of Life Index' in row.text:
+                cols = row.find_all('td')
+                if len(cols) > 1:
+                    return float(cols[1].get_text(strip=True).replace(',', ''))
+    return None
+
+
+def extract_safety_index(url):
+    r = requests.get(url)
+    soup = BeautifulSoup(r.text, 'html.parser')
+    for row in soup.find_all('tr'):
+        if 'Safety Index' in row.text:
+            cols = row.find_all('td')
+            if len(cols) > 1:
+                return float(cols[1].get_text(strip=True).replace(',', ''))
+    return None
+
+
+def get_temperature(city):
+    p = {'q': city, 'appid': WEATHER_API_KEY, 'units': 'metric'}
+    try:
+        r = requests.get(WEATHER_API_URL, params=p)
+        data = r.json()
+        if r.status_code == 200 and 'main' in data:
+            return data['main']['temp']
+    except:
+        pass
+    return None
+
+
+def truncate_table():
+    conn = pymysql.connect(
+        host='localhost',
+        user='root',
+        password='Quality_of_life',
+        db='quality_of_life',
+        charset='utf8mb4'
+    )
+    cur = conn.cursor()
+    try:
+        cur.execute("TRUNCATE TABLE city_stats")
+        conn.commit()
+    except Exception as e:
+        print(f"Truncate failed: {e}")
+        conn.rollback()
+    finally:
+        conn.close()
+
+
+def scrape_city_data(city_url, city_name, country):
+    url = f"https://www.numbeo.com/cost-of-living/in/{city_url}"
+
+    currency = {
+        "Denmark": "DKK",
+        "Germany": "EUR"
+    }.get(country, "SEK")
+
+    rent = extract_rent(url, currency)
+    salary = extract_salary(url, currency)
+    cost = extract_monthly_cost_excluding_rent(url, currency)
+
+    if city_name == "Helsingborg" and not cost:
+        malmo_url = "https://www.numbeo.com/cost-of-living/in/Malmo"
+        fallback = extract_monthly_cost_excluding_rent(malmo_url)
+        if fallback:
+            cost = fallback * 0.97
+
+    total = cost + rent if rent and cost else None
+    leftover = salary - total if salary and total else None
+
+    qol = extract_quality_of_life(f"https://www.numbeo.com/quality-of-life/in/{city_url}")
+    safety = extract_safety_index(f"https://www.numbeo.com/quality-of-life/in/{city_url}")
+    temp = get_temperature(city_name)
+
+    population = {
+        "Stockholm": 1700000,
+        "Copenhagen": 1400000,
+        "Helsingborg": 151404,
+        "Malmo": 339800,
+        "Gothenburg": 664000,
+        "Berlin": 3600000
+    }.get(city_name, 3600000)
+
+    conn = pymysql.connect(
+        host='localhost',
+        user='root',
+        password='Quality_of_life',
+        db='quality_of_life',
+        charset='utf8mb4'
+    )
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            INSERT INTO city_stats 
+            (city_name, country_name, rent_monthly_1br, total_monthly_cost, avg_salary_net, leftover_income, qol_index, safety_index, temperature_celsius, population, date_collected)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (city_name, country, rent, total, salary, leftover, qol, safety, temp, population, date.today()))
+        conn.commit()
+    except Exception as e:
+        print(f"Insert failed: {e}")
+        conn.rollback()
+    finally:
+        conn.close()
+
+
+truncate_table()
+scrape_city_data("Stockholm", "Stockholm", "Sweden")
+scrape_city_data("Copenhagen", "Copenhagen", "Denmark")
+scrape_city_data("Helsingborg", "Helsingborg", "Sweden")
+scrape_city_data("Malmo", "Malmo", "Sweden")
+scrape_city_data("Gothenburg", "Gothenburg", "Sweden")
+scrape_city_data("Berlin", "Berlin", "Germany")
+print("Done")
