@@ -1,1 +1,13 @@
-
+CREATE TABLE quality_of_life.city_stats (
+    city_name VARCHAR(255),
+    country_name VARCHAR(255),
+    rent_monthly_1br DECIMAL(10, 2),
+    total_monthly_cost DECIMAL(10, 2),
+    avg_salary_net DECIMAL(10, 2),
+    leftover_income DECIMAL(10, 2),
+    safety_index DECIMAL(5, 2),
+    qol_index DECIMAL(5, 2),
+    temperature_celsius DECIMAL(5, 2),
+    population INT,
+    date_collected DATE
+);
