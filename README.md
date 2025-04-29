@@ -14,9 +14,9 @@ This project collects cost of living, rent, salary, and quality of life data for
 
 ## 📁 Project Structure
 
-- `scripts/scraper.py` – Full scraping + processing pipeline
-- `sql/schema.sql` – SQL to create the `city_stats` table
-- `data/sample_data.csv` – Sample data 
+- `Scripts/scraper.py` – Full scraping + processing pipeline
+- `Sql/schema.sql` – SQL to create the `city_stats` table
+- `Data/sample_data.csv` – Sample data 
 - `Power BI dashboard` – Shown on [my website](#)
 
 ## 🚀 How to Run
